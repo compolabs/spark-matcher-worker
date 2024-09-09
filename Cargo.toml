@@ -6,12 +6,12 @@ edition = "2021"
 [dependencies]
 dotenv = "0.15.0"
 futures-util = "0.3"
-fuels = { version = "0.65.1", features = ["fuel-core-lib"] }
+fuels = { version = "0.66.3", features = ["fuel-core-lib"] }
 log = "0.4"
 env_logger = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.116"
-spark-market-sdk = "0.2.1"
+spark-market-sdk = "0.3.1"
 thiserror = "1.0.63"
 tokio = { version = "1.12", features = ["rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.17.1"
