@@ -147,6 +147,19 @@ impl MatcherClient {
         let market = SparkMarketContract::new(ContractId::from_str(&contract_id)? ,wallet).await;
 
         let unique_order_ids: HashSet<String> = orders.into_iter().map(|order| order.id).collect();
+        info!("=========================================");
+        info!("DEBUG");
+        for i in &unique_order_ids {
+            info!("-------------");
+            info!("order: {:?}", i);
+            /*
+            let bits_i = fuels::types::Bits256::from_hex_str(i).unwrap();
+            let a = market.order(bits_i).await;
+            info!("order info");
+            info!("{:?}",a);
+            */
+        };
+        info!("=========================================");
         let unique_bits256_ids: Vec<fuels::types::Bits256> = unique_order_ids
             .iter()
             .map(|id| fuels::types::Bits256::from_hex_str(id).unwrap())
