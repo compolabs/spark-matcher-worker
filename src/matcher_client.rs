@@ -72,7 +72,7 @@ impl MatcherClient {
                     error!("Failed to connect Matcher {}: {:?}", self.uuid, e);
                 }
             }
-            sleep(Duration::from_secs(10)).await; 
+            sleep(Duration::from_secs(20)).await; 
         }
     }
 
@@ -152,12 +152,6 @@ impl MatcherClient {
         for i in &unique_order_ids {
             info!("-------------");
             info!("order: {:?}", i);
-            /*
-            let bits_i = fuels::types::Bits256::from_hex_str(i).unwrap();
-            let a = market.order(bits_i).await;
-            info!("order info");
-            info!("{:?}",a);
-            */
         };
         info!("=========================================");
         let unique_bits256_ids: Vec<fuels::types::Bits256> = unique_order_ids
