@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dotenv = "0.15.0"
 futures-util = "0.3"
 fuels = { version = "0.65.1", features = ["fuel-core-lib"] }
 log = "0.4"

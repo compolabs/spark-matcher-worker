@@ -3,31 +3,31 @@ use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use spark_market_sdk::SparkMarketContract;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url::Url;
 use std::{collections::HashSet, str::FromStr, time::Duration};
 use tokio::time::sleep;
-use dotenv::dotenv;
-use std::env;
 use uuid::Uuid;
+use std::sync::Arc;
 
 use crate::error::Error;
+use crate::config::Settings;
 
 #[derive(Serialize, Deserialize)]
 pub enum MatcherRequest {
-    Orders(Vec<SpotOrder>), 
+    Orders(Vec<SpotOrder>),
 }
 
 #[derive(Serialize, Deserialize)]
 pub enum MatcherResponse {
-    MatchResult { success: bool, matched_orders: Vec<String> }, 
+    MatchResult { success: bool, matched_orders: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpotOrder {
     pub id: String,
     pub price: u128,
-    pub order_type: String,  
+    pub order_type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,22 +44,21 @@ pub enum MatcherMessage {
 pub struct MatcherClient {
     pub uuid: Uuid,
     pub ws_url: Url,
+    pub settings: Arc<Settings>,
+    pub hd_wallet_number: Arc<std::sync::Mutex<u32>>, 
 }
 
 impl MatcherClient {
-    pub fn new(ws_url: Url) -> Self {
-        dotenv().ok(); 
+    pub fn new(ws_url: Url, settings: Arc<Settings>) -> Self {
+        let uuid = Uuid::parse_str(&settings.uuid)
+            .expect("Invalid UUID format in configuration");
 
-        let uuid = match env::var("MATCHER_UUID") {
-            Ok(uuid_str) => Uuid::parse_str(&uuid_str).expect("Invalid UUID format in .env"),
-            Err(_) => {
-                let new_uuid = Uuid::new_v4();
-                println!("No MATCHER_UUID found in .env. Generated new UUID: {}", new_uuid);
-                new_uuid
-            }
-        };
-
-        MatcherClient { uuid, ws_url }
+        MatcherClient {
+            uuid,
+            ws_url,
+            settings,
+            hd_wallet_number: Arc::new(std::sync::Mutex::new(0)), 
+        }
     }
 
     pub async fn connect(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -72,105 +71,114 @@ impl MatcherClient {
                     error!("Failed to connect Matcher {}: {:?}", self.uuid, e);
                 }
             }
-            sleep(Duration::from_secs(20)).await; 
+            sleep(Duration::from_secs(20)).await;
         }
     }
 
     async fn connect_to_ws(
-            &self,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            let (ws_stream, _) = connect_async(&self.ws_url).await?;
-            let (mut write, mut read) = ws_stream.split();
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            match connect_async(&self.ws_url).await {
+                Ok((ws_stream, _)) => {
+                    let (mut write, mut read) = ws_stream.split();
 
-            let identify_message = MatcherConnectRequest {
-                uuid: self.uuid.to_string(),
-            };
-            let msg = serde_json::to_string(&identify_message)?;
-            info!("Sending identification message: {}", msg);
-            write.send(Message::Text(msg)).await?;
+                    let identify_message = MatcherConnectRequest {
+                        uuid: self.uuid.to_string(),
+                    };
+                    let msg = serde_json::to_string(&identify_message)?;
+                    info!("Sending identification message: {}", msg);
+                    write.send(Message::Text(msg)).await?;
 
-            info!("Sent identification message for matcher: {}", self.uuid);
+                    info!("Sent identification message for matcher: {}", self.uuid);
 
-            while let Some(message) = read.next().await {
-                match message {
-                    Ok(Message::Text(text)) => {
-                        info!("Received message: {}", text);
+                    while let Some(message) = read.next().await {
+                        match message {
+                            Ok(Message::Text(text)) => {
+                                if let Ok(MatcherRequest::Orders(orders)) = serde_json::from_str::<MatcherRequest>(&text) {
+                                    let match_result = self.match_orders(orders.clone()).await;
 
-                        if let Ok(MatcherRequest::Orders(orders)) = serde_json::from_str::<MatcherRequest>(&text) {
-                            info!("Received orders for matching: {:?}", orders);
+                                    let response = match match_result {
+                                        Ok(_) => MatcherMessage::MatchResult {
+                                            success: true,
+                                            orders: orders.into_iter().map(|order| order.id).collect(),
+                                        },
+                                        Err(_) => MatcherMessage::MatchResult {
+                                            success: false,
+                                            orders: orders.into_iter().map(|order| order.id).collect(),
+                                        },
+                                    };
 
-                            let match_result = match_orders(orders.clone()).await;
+                                    let response_msg = serde_json::to_string(&response)?;
+                                    write.send(Message::Text(response_msg)).await?;
+                                    info!("Sent match result for orders");
 
-                            let response = match match_result {
-                                Ok(_) => MatcherMessage::MatchResult { 
-                                    success: true, 
-                                    orders: orders.into_iter().map(|order| order.id).collect(), 
-                                },
-                                Err(_) => MatcherMessage::MatchResult { 
-                                    success: false, 
-                                    orders: orders.into_iter().map(|order| order.id).collect(), 
+                                    
+                                    sleep(Duration::from_millis(500)).await;
                                 }
-                            };
-
-                            let response_msg = serde_json::to_string(&response)?;
-                            write.send(Message::Text(response_msg)).await?;
-                            info!("Sent match result for orders");
+                            }
+                            Ok(Message::Close(_)) => {
+                                info!("Connection closed by server. Attempting to reconnect...");
+                                break;
+                            }
+                            Err(e) => {
+                                error!("WebSocket error: {:?}", e);
+                                break;
+                            }
+                            _ => {}
                         }
                     }
-                    Ok(Message::Close(_)) => {
-                        info!("Connection closed by server");
-                        break;
-                    }
-                    Err(e) => {
-                        error!("WebSocket error: {:?}", e);
-                        break;
-                    }
-                    _ => {}
+                }
+                Err(e) => {
+                    error!("Failed to connect: {:?}", e);
                 }
             }
 
-            Ok(())
+            info!("Retrying connection in 20 seconds...");
+            sleep(Duration::from_secs(20)).await;
         }
+    }
 
-
-
-}
-
-    pub async fn match_orders(orders: Vec<SpotOrder>) -> Result<(), Error> {
+    
+    pub async fn match_orders(&self, orders: Vec<SpotOrder>) -> Result<(), Error> {
         let provider = Provider::connect("testnet.fuel.network").await?;
-        
-        let mnemonic = std::env::var("MNEMONIC").expect("MNEMONIC not set in env");
-        let contract_id = std::env::var("CONTRACT_ID").expect("CONTRACT_ID not set in env");
 
-        let wallet = WalletUnlocked::new_from_mnemonic_phrase(&mnemonic, Some(provider.clone()))
-            .expect("Failed to create wallet");
-        let market = SparkMarketContract::new(ContractId::from_str(&contract_id)? ,wallet).await;
+        
+        let mut hd_wallet_number = self.hd_wallet_number.lock().unwrap();
+        let current_wallet_number = *hd_wallet_number;
+        *hd_wallet_number = (*hd_wallet_number + 1) % 10; 
+
+        let path = format!("m/44'/1179993420'/{}'/0/0", current_wallet_number);
+        let wallet = WalletUnlocked::new_from_mnemonic_phrase_with_path(
+            &self.settings.mnemonic,
+            Some(provider.clone()),
+            &path,
+        ).expect("Failed to create wallet");
+
+        let market = SparkMarketContract::new(ContractId::from_str(&self.settings.contract_id)?, wallet).await;
 
         let unique_order_ids: HashSet<String> = orders.into_iter().map(|order| order.id).collect();
-        info!("=========================================");
-        info!("DEBUG");
-        for i in &unique_order_ids {
-            info!("-------------");
-            info!("order: {:?}", i);
-        };
-        info!("=========================================");
+        info!("Processing {} orders with HD wallet {}", unique_order_ids.len(), current_wallet_number);
+
         let unique_bits256_ids: Vec<fuels::types::Bits256> = unique_order_ids
             .iter()
             .map(|id| fuels::types::Bits256::from_hex_str(id).unwrap())
             .collect();
 
         info!("Attempting to match orders...");
+
         match market.match_order_many(unique_bits256_ids).await {
             Ok(result) => {
                 info!(
-                    "Matched orders successfully. Transaction ID: {:?}, Gas used: {:?}",
-                    result.tx_id, result.gas_used
+                    "Matched orders successfully with HD wallet {}. Transaction ID: {:?}, Gas used: {:?}",
+                    current_wallet_number, result.tx_id, result.gas_used
                 );
                 Ok(())
             }
             Err(e) => {
-                error!("Error while matching orders: {:?}", e);
+                error!("Error while matching orders with HD wallet {}: {:?}", current_wallet_number, e);
                 Err(Error::MatchOrdersError(e.to_string()))
             }
         }
+    }
 }
