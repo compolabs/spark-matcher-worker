@@ -46,6 +46,13 @@ impl OrderProcessor {
 
         info!("Processing orders with HD wallet {}", hd_wallet_number);
 
+        info!("=======DEBUG=======");
+        for o in unique_bits256_ids.clone(){
+
+            let a = market.order(o).await.unwrap();
+            info!("{:?}",a);
+        }
+        info!("=======DEBUG=======");
         
         match market.match_order_many(unique_bits256_ids.clone()).await {
             Ok(result) => {
