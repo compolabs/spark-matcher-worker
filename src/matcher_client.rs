@@ -2,32 +2,52 @@ use fuels::{accounts::{provider::Provider, wallet::WalletUnlocked}, types::Contr
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
-use spark_market_sdk::SparkMarketContract;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
 use url::Url;
-use std::{collections::HashSet, str::FromStr, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
 use uuid::Uuid;
-use std::sync::Arc;
+use schemars::JsonSchema;
+use std::sync::Mutex;
 
-use crate::error::Error;
-use crate::config::Settings;
+use crate::{error::Error, config::Settings, order_processor::OrderProcessor};
 
-#[derive(Serialize, Deserialize)]
-pub enum MatcherRequest {
-    Orders(Vec<SpotOrder>),
+#[derive(Debug, PartialEq, Eq, Clone, Copy, JsonSchema, Serialize, Deserialize)]
+pub enum OrderType {
+    Buy,
+    Sell,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum MatcherResponse {
-    MatchResult { success: bool, matched_orders: Vec<String> },
+#[derive(Debug, PartialEq, Eq, Clone, Copy, JsonSchema, Serialize, Deserialize)]
+pub enum OrderStatus {
+    New,
+    InProgress,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MatcherOrderUpdate {
+    pub order_id: String,
+    pub price: u128,
+    pub timestamp: u64,
+    pub new_amount: u128,
+    pub status: Option<OrderStatus>,
+    pub order_type: OrderType,
+}
+
+#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
 pub struct SpotOrder {
     pub id: String,
+    pub user: String,
+    pub asset: String,
+    pub amount: u128,
     pub price: u128,
-    pub order_type: String,
+    pub timestamp: u64,
+    pub order_type: OrderType,
+    pub status: Option<OrderStatus>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,149 +56,124 @@ pub struct MatcherConnectRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum MatcherMessage {
-    Identify { uuid: String },
-    MatchResult { success: bool, orders: Vec<String> },
+pub struct MatcherRequest {
+    pub orders: Vec<SpotOrder>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MatcherResponse {
+    pub success: bool,
+    pub orders: Vec<MatcherOrderUpdate>,  
 }
 
 pub struct MatcherClient {
-    pub uuid: Uuid,
-    pub ws_url: Url,
-    pub settings: Arc<Settings>,
-    pub hd_wallet_number: Arc<std::sync::Mutex<u32>>, 
+    uuid: Uuid,
+    ws_url: Url,
+    settings: Arc<Settings>,
+    hd_wallet_number: Arc<Mutex<u32>>,
+    order_processor: OrderProcessor,
 }
 
 impl MatcherClient {
     pub fn new(ws_url: Url, settings: Arc<Settings>) -> Self {
-        let uuid = Uuid::parse_str(&settings.uuid)
-            .expect("Invalid UUID format in configuration");
+        let uuid = Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
 
         MatcherClient {
             uuid,
             ws_url,
-            settings,
-            hd_wallet_number: Arc::new(std::sync::Mutex::new(0)), 
+            settings: settings.clone(),
+            hd_wallet_number: Arc::new(Mutex::new(0)),
+            order_processor: OrderProcessor::new(settings.clone()),
         }
     }
 
     pub async fn connect(&self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             match self.connect_to_ws().await {
-                Ok(_) => {
-                    info!("Matcher {} connected successfully!", self.uuid);
-                }
-                Err(e) => {
-                    error!("Failed to connect Matcher {}: {:?}", self.uuid, e);
-                }
+                Ok(_) => info!("Matcher {} connected successfully!", self.uuid),
+                Err(e) => error!("Failed to connect Matcher {}: {:?}", self.uuid, e),
             }
             sleep(Duration::from_secs(20)).await;
         }
     }
 
-    async fn connect_to_ws(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        loop {
-            match connect_async(&self.ws_url).await {
-                Ok((ws_stream, _)) => {
-                    let (mut write, mut read) = ws_stream.split();
+    async fn connect_to_ws(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match connect_async(&self.ws_url).await {
+            Ok((ws_stream, _)) => {
+                let (mut write, mut read) = ws_stream.split();
 
-                    let identify_message = MatcherConnectRequest {
-                        uuid: self.uuid.to_string(),
-                    };
-                    let msg = serde_json::to_string(&identify_message)?;
-                    info!("Sending identification message: {}", msg);
-                    write.send(Message::Text(msg)).await?;
+                let identify_message = MatcherConnectRequest {
+                    uuid: self.uuid.to_string(),
+                };
+                let msg = serde_json::to_string(&identify_message)?;
+                info!("Sending identification message: {}", msg);
+                write.send(Message::Text(msg)).await?;
 
-                    info!("Sent identification message for matcher: {}", self.uuid);
+                info!("Sent identification message for matcher: {}", self.uuid);
 
-                    while let Some(message) = read.next().await {
-                        match message {
-                            Ok(Message::Text(text)) => {
-                                if let Ok(MatcherRequest::Orders(orders)) = serde_json::from_str::<MatcherRequest>(&text) {
-                                    let match_result = self.match_orders(orders.clone()).await;
-
-                                    let response = match match_result {
-                                        Ok(_) => MatcherMessage::MatchResult {
-                                            success: true,
-                                            orders: orders.into_iter().map(|order| order.id).collect(),
-                                        },
-                                        Err(_) => MatcherMessage::MatchResult {
-                                            success: false,
-                                            orders: orders.into_iter().map(|order| order.id).collect(),
-                                        },
-                                    };
-
-                                    let response_msg = serde_json::to_string(&response)?;
-                                    write.send(Message::Text(response_msg)).await?;
-                                    info!("Sent match result for orders");
-
-                                    
-                                    sleep(Duration::from_millis(500)).await;
-                                }
+                while let Some(message) = read.next().await {
+                    match message {
+                        Ok(Message::Text(text)) => {
+                            if let Ok(request) = serde_json::from_str::<MatcherRequest>(&text) {
+                                self.process_orders(request.orders, &mut write).await?;
                             }
-                            Ok(Message::Close(_)) => {
-                                info!("Connection closed by server. Attempting to reconnect...");
-                                break;
-                            }
-                            Err(e) => {
-                                error!("WebSocket error: {:?}", e);
-                                break;
-                            }
-                            _ => {}
                         }
+                        Ok(Message::Close(_)) => {
+                            info!("Connection closed by server. Reconnecting...");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("WebSocket error: {:?}", e);
+                            break;
+                        }
+                        _ => {}
                     }
                 }
-                Err(e) => {
-                    error!("Failed to connect: {:?}", e);
-                }
-            }
-
-            info!("Retrying connection in 20 seconds...");
-            sleep(Duration::from_secs(20)).await;
-        }
-    }
-
-    
-    pub async fn match_orders(&self, orders: Vec<SpotOrder>) -> Result<(), Error> {
-        let provider = Provider::connect("testnet.fuel.network").await?;
-
-        
-        let mut hd_wallet_number = self.hd_wallet_number.lock().unwrap();
-        let current_wallet_number = *hd_wallet_number;
-        *hd_wallet_number = (*hd_wallet_number + 1) % 10; 
-
-        let path = format!("m/44'/1179993420'/{}'/0/0", current_wallet_number);
-        let wallet = WalletUnlocked::new_from_mnemonic_phrase_with_path(
-            &self.settings.mnemonic,
-            Some(provider.clone()),
-            &path,
-        ).expect("Failed to create wallet");
-
-        let market = SparkMarketContract::new(ContractId::from_str(&self.settings.contract_id)?, wallet).await;
-
-        let unique_order_ids: HashSet<String> = orders.into_iter().map(|order| order.id).collect();
-        info!("Processing {} orders with HD wallet {}", unique_order_ids.len(), current_wallet_number);
-
-        let unique_bits256_ids: Vec<fuels::types::Bits256> = unique_order_ids
-            .iter()
-            .map(|id| fuels::types::Bits256::from_hex_str(id).unwrap())
-            .collect();
-
-        info!("Attempting to match orders...");
-
-        match market.match_order_many(unique_bits256_ids).await {
-            Ok(result) => {
-                info!(
-                    "Matched orders successfully with HD wallet {}. Transaction ID: {:?}, Gas used: {:?}",
-                    current_wallet_number, result.tx_id, result.gas_used
-                );
-                Ok(())
             }
             Err(e) => {
-                error!("Error while matching orders with HD wallet {}: {:?}", current_wallet_number, e);
-                Err(Error::MatchOrdersError(e.to_string()))
+                error!("Failed to connect: {:?}", e);
+                return Err(Box::new(Error::ConnectionError(e.to_string())));
             }
         }
+        Ok(())
+    }
+
+    async fn process_orders(
+        &self,
+        orders: Vec<SpotOrder>,
+        write: &mut futures_util::stream::SplitSink<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        
+        let result = self.order_processor.match_orders(orders.clone()).await;
+
+        let response = match result {
+            Ok(updates) => MatcherResponse {
+                success: true,
+                orders: updates,  
+            },
+            Err(_) => {
+                let failed_updates: Vec<MatcherOrderUpdate> = orders.into_iter().map(|order| MatcherOrderUpdate {
+                    order_id: order.id,
+                    price: order.price,
+                    timestamp: order.timestamp,
+                    new_amount: order.amount, 
+                    status: Some(OrderStatus::Failed), 
+                    order_type: order.order_type,
+                }).collect();
+
+                MatcherResponse {
+                    success: false,
+                    orders: failed_updates,  
+                }
+            }
+        };
+
+        let response_msg = serde_json::to_string(&response)?;
+        write.send(Message::Text(response_msg)).await?;
+        info!("Sent match result for orders");
+
+        sleep(Duration::from_millis(500)).await;
+
+        Ok(())
     }
 }

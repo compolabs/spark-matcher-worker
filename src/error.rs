@@ -37,6 +37,9 @@ pub enum Error {
 
     #[error("Tokio tungstenite stream error {0}")]
     TokioTungsteniteStreamError(#[from] std::io::Error),
+
+    #[error("Middleware connection error {0}")]
+    ConnectionError(String),
 }
 
 impl From<&str> for Error {
