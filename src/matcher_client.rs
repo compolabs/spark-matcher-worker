@@ -56,8 +56,8 @@ pub struct MatcherConnectRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MatcherRequest {
-    pub orders: Vec<SpotOrder>,
+pub enum MatcherRequest {
+    Orders(Vec<SpotOrder>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,8 +114,10 @@ impl MatcherClient {
                 while let Some(message) = read.next().await {
                     match message {
                         Ok(Message::Text(text)) => {
-                            if let Ok(request) = serde_json::from_str::<MatcherRequest>(&text) {
-                                self.process_orders(request.orders, &mut write).await?;
+                            if let Ok(MatcherRequest::Orders(orders)) = serde_json::from_str::<MatcherRequest>(&text) {
+                                self.process_orders(orders, &mut write).await?;
+                            } else {
+                                error!("Failed to parse MatcherRequest");
                             }
                         }
                         Ok(Message::Close(_)) => {
@@ -126,7 +128,9 @@ impl MatcherClient {
                             error!("WebSocket error: {:?}", e);
                             break;
                         }
-                        _ => {}
+                        _ => {
+                            error!("Unexpected message format");
+                        }
                     }
                 }
             }
@@ -143,27 +147,51 @@ impl MatcherClient {
         orders: Vec<SpotOrder>,
         write: &mut futures_util::stream::SplitSink<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Processing batch of {} orders", orders.len()); 
+
         
+        let (min_sell, max_buy) = self.calculate_spread(&orders);
+        info!("Batch spread - Max Buy: {}, Min Sell: {}", max_buy.unwrap_or(0), min_sell.unwrap_or(0));
+
+        // Логика правильного спреда: если Max Buy >= Min Sell, это хороший спред
+        if let (Some(max_buy), Some(min_sell)) = (max_buy, min_sell) {
+            if max_buy < min_sell {
+                error!("Invalid batch: Max Buy ({}) < Min Sell ({}), batch rejected", max_buy, min_sell);
+                return Err(Box::new(Error::InvalidBatchError)); // Ошибка, если Max Buy меньше Min Sell
+            }
+        }
+
+        info!("Orders:");
+        for o in &orders {
+            info!("id: {:?} | status {:?}, | type {:?}", o.id, o.status, o.order_type);
+        }
+        let order_ids : Vec<String> = orders.clone().into_iter().map(|o|o.id).collect();
+        info!("orders {:?}", order_ids);
+
         let result = self.order_processor.match_orders(orders.clone()).await;
 
         let response = match result {
-            Ok(updates) => MatcherResponse {
-                success: true,
-                orders: updates,  
-            },
-            Err(_) => {
+            Ok(updates) => {
+                info!("Orders processed successfully");  
+                MatcherResponse {
+                    success: true,
+                    orders: updates,
+                }
+            }
+            Err(err) => {
+                error!("Error while processing orders: {:?}", err);  
                 let failed_updates: Vec<MatcherOrderUpdate> = orders.into_iter().map(|order| MatcherOrderUpdate {
                     order_id: order.id,
                     price: order.price,
                     timestamp: order.timestamp,
-                    new_amount: order.amount, 
-                    status: Some(OrderStatus::Failed), 
+                    new_amount: order.amount,
+                    status: Some(OrderStatus::Failed),
                     order_type: order.order_type,
                 }).collect();
 
                 MatcherResponse {
                     success: false,
-                    orders: failed_updates,  
+                    orders: failed_updates,
                 }
             }
         };
@@ -175,5 +203,36 @@ impl MatcherClient {
         sleep(Duration::from_millis(500)).await;
 
         Ok(())
+    }
+
+    fn calculate_spread(&self, orders: &Vec<SpotOrder>) -> (Option<u128>, Option<u128>) {
+        let mut min_sell: Option<u128> = None;
+        let mut max_buy: Option<u128> = None;
+
+        for order in orders {
+            match order.order_type {
+                OrderType::Buy => {
+                    if let Some(max) = max_buy {
+                        if order.price > max {
+                            max_buy = Some(order.price);
+                        }
+                    } else {
+                        max_buy = Some(order.price);
+                    }
+                }
+                OrderType::Sell => {
+                    if let Some(min) = min_sell {
+                        if order.price < min {
+                            min_sell = Some(order.price);
+                        }
+                    } else {
+                        min_sell = Some(order.price);
+                    }
+                }
+            }
+        }
+
+        // Возвращаем значения в правильном порядке: сначала max_buy, затем min_sell
+        (max_buy, min_sell)
     }
 }

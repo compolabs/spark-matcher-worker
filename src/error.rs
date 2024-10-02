@@ -40,6 +40,9 @@ pub enum Error {
 
     #[error("Middleware connection error {0}")]
     ConnectionError(String),
+
+    #[error("Invalid batch error")]
+    InvalidBatchError,
 }
 
 impl From<&str> for Error {
