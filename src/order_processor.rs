@@ -47,13 +47,14 @@ impl OrderProcessor {
         info!("Processing orders with HD wallet {}", hd_wallet_number);
 
         info!("=======DEBUG=======");
-        for o in unique_bits256_ids.clone(){
-
-            let a = market.order(o).await.unwrap();
-            info!("{:?}",a);
+        for o in orders.clone(){
+            info!("{:?}",o.id);
+            let b = fuels::types::Bits256::from_hex_str(&o.id).unwrap();
+            let a = market.order(b).await.unwrap();
+            info!("{:?}",a.value);
         }
         info!("=======DEBUG=======");
-        
+ 
         match market.match_order_many(unique_bits256_ids.clone()).await {
             Ok(result) => {
                 info!("Matched orders successfully. Tx ID: {:?}, Gas used: {:?}", result.tx_id, result.gas_used);
