@@ -197,7 +197,10 @@ impl MatcherClient {
         };
 
         let response_msg = serde_json::to_string(&response)?;
-        write.send(Message::Text(response_msg)).await?;
+        if let Err(e) = write.send(Message::Text(response_msg)).await {
+            error!("Failed to send response to middleware: {:?}", e);
+            return Err(Box::new(Error::SendResponseError(e.to_string())));
+        }
         info!("Sent match result for orders");
 
         sleep(Duration::from_millis(500)).await;

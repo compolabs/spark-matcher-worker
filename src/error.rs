@@ -26,6 +26,9 @@ pub enum Error {
     #[error("String parsing error: {0}")]
     StringParsingError(String),
 
+    #[error("Failed to responce to middleware {0}")]
+    SendResponseError(String),
+
     #[error("Url parse error {0}")]
     UrlParseError(#[from] url::ParseError),
 

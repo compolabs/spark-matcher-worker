@@ -45,7 +45,7 @@ impl OrderProcessor {
             .collect();
 
         info!("Processing orders with HD wallet {}", hd_wallet_number);
-
+/*
         info!("=======DEBUG=======");
         for o in orders.clone(){
             info!("{:?}",o.id);
@@ -54,7 +54,7 @@ impl OrderProcessor {
             info!("{:?}",a.value);
         }
         info!("=======DEBUG=======");
- 
+*/
         match market.match_order_many(unique_bits256_ids.clone()).await {
             Ok(result) => {
                 info!("Matched orders successfully. Tx ID: {:?}, Gas used: {:?}", result.tx_id, result.gas_used);
