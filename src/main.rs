@@ -2,6 +2,7 @@ mod config;
 mod matcher_client;
 mod error;
 mod order_processor;
+mod types;
 
 use config::AppConfig;
 use matcher_client::MatcherClient;

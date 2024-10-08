@@ -1,89 +1,42 @@
-use fuels::{accounts::{provider::Provider, wallet::WalletUnlocked}, types::ContractId};
+use crate::config::Settings;
+use crate::error::Error;
+use crate::order_processor::OrderProcessor;
+use crate::types::{
+    MatcherBatchRequest, MatcherConnectRequest, MatcherRequest, MatcherResponse, SpotOrder,
+};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
-use serde::{Deserialize, Serialize};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, WebSocketStream};
-use url::Url;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::protocol::Message,
+    MaybeTlsStream, WebSocketStream,
+};
+use url::Url;
 use uuid::Uuid;
-use schemars::JsonSchema;
-use std::sync::Mutex;
 
-use crate::{error::Error, config::Settings, order_processor::OrderProcessor};
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, JsonSchema, Serialize, Deserialize)]
-pub enum OrderType {
-    Buy,
-    Sell,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, JsonSchema, Serialize, Deserialize)]
-pub enum OrderStatus {
-    New,
-    InProgress,
-    PartiallyFilled,
-    Filled,
-    Cancelled,
-    Failed,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MatcherOrderUpdate {
-    pub order_id: String,
-    pub price: u128,
-    pub timestamp: u64,
-    pub new_amount: u128,
-    pub status: Option<OrderStatus>,
-    pub order_type: OrderType,
-}
-
-#[derive(Debug, Clone, JsonSchema, Serialize, Deserialize)]
-pub struct SpotOrder {
-    pub id: String,
-    pub user: String,
-    pub asset: String,
-    pub amount: u128,
-    pub price: u128,
-    pub timestamp: u64,
-    pub order_type: OrderType,
-    pub status: Option<OrderStatus>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MatcherConnectRequest {
-    pub uuid: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum MatcherRequest {
-    Orders(Vec<SpotOrder>),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MatcherResponse {
-    pub success: bool,
-    pub orders: Vec<MatcherOrderUpdate>,  
-}
-
+#[derive(Clone)]
 pub struct MatcherClient {
     uuid: Uuid,
     ws_url: Url,
     settings: Arc<Settings>,
-    hd_wallet_number: Arc<Mutex<u32>>,
     order_processor: OrderProcessor,
+    free_wallets: Arc<Mutex<u32>>, // Number of free wallets
 }
 
 impl MatcherClient {
     pub fn new(ws_url: Url, settings: Arc<Settings>) -> Self {
-        let uuid = Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
+        let uuid =
+            Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
 
         MatcherClient {
             uuid,
             ws_url,
             settings: settings.clone(),
-            hd_wallet_number: Arc::new(Mutex::new(0)),
             order_processor: OrderProcessor::new(settings.clone()),
+            free_wallets: Arc::new(Mutex::new(10)), // Initially, all 10 wallets are free
         }
     }
 
@@ -93,149 +46,119 @@ impl MatcherClient {
                 Ok(_) => info!("Matcher {} connected successfully!", self.uuid),
                 Err(e) => error!("Failed to connect Matcher {}: {:?}", self.uuid, e),
             }
-            sleep(Duration::from_secs(20)).await;
+            sleep(std::time::Duration::from_secs(20)).await;
         }
     }
 
     async fn connect_to_ws(&self) -> Result<(), Box<dyn std::error::Error>> {
-        match connect_async(&self.ws_url).await {
-            Ok((ws_stream, _)) => {
-                let (mut write, mut read) = ws_stream.split();
+        // Establish WebSocket connection
+        let (ws_stream, _) = connect_async(&self.ws_url).await?;
+        let (write, mut read) = ws_stream.split();
+        let write = Arc::new(Mutex::new(write));
 
-                let identify_message = MatcherConnectRequest {
-                    uuid: self.uuid.to_string(),
-                };
-                let msg = serde_json::to_string(&identify_message)?;
-                info!("Sending identification message: {}", msg);
-                write.send(Message::Text(msg)).await?;
+        // Send identification message
+        let identify_message = MatcherConnectRequest {
+            uuid: self.uuid.to_string(),
+        };
+        let msg = serde_json::to_string(&identify_message)?;
+        info!("Sending identification message: {}", msg);
+        {
+            let mut write_lock = write.lock().await;
+            write_lock.send(Message::Text(msg)).await?;
+        }
+        info!("Sent identification message for matcher: {}", self.uuid);
 
-                info!("Sent identification message for matcher: {}", self.uuid);
+        // Main loop: request batches and handle responses
+        let free_wallets = self.free_wallets.clone();
+        let order_processor = self.order_processor.clone();
 
-                while let Some(message) = read.next().await {
+        loop {
+            // Check for available wallets
+            let wallets_available = {
+                let wallets = free_wallets.lock().await;
+                *wallets > 0
+            };
+
+            if wallets_available {
+                // Request a batch
+                self.request_batch(write.clone()).await?;
+
+                // Wait for a response with a batch
+                if let Some(message) = read.next().await {
                     match message {
                         Ok(Message::Text(text)) => {
-                            if let Ok(MatcherRequest::Orders(orders)) = serde_json::from_str::<MatcherRequest>(&text) {
-                                self.process_orders(orders, &mut write).await?;
+                            if let Ok(MatcherResponse::Batch(orders)) =
+                                serde_json::from_str::<MatcherResponse>(&text)
+                            {
+                                // Process the received batch of orders
+                                let free_wallets_clone = self.free_wallets.clone();
+                                let order_processor_clone = order_processor.clone();
+                                let write_clone = write.clone();
+
+                                tokio::spawn(async move {
+                                    let updates = match order_processor_clone
+                                        .process_orders(orders, free_wallets_clone.clone())
+                                        .await
+                                    {
+                                        Ok(updates) => updates,
+                                        Err(e) => {
+                                            error!("Error processing orders: {:?}", e);
+                                            Vec::new()
+                                        }
+                                    };
+
+                                    // Send processing results back to the server
+                                    let response = MatcherRequest::OrderUpdates(updates);
+                                    let response_msg = serde_json::to_string(&response).unwrap();
+                                    let mut write_lock = write_clone.lock().await;
+                                    if let Err(e) = write_lock.send(Message::Text(response_msg)).await {
+                                        error!("Failed to send updates to server: {:?}", e);
+                                    }
+                                });
                             } else {
-                                error!("Failed to parse MatcherRequest");
+                                error!("Failed to parse MatcherResponse");
                             }
                         }
                         Ok(Message::Close(_)) => {
                             info!("Connection closed by server. Reconnecting...");
-                            break;
+                            break Ok(());
                         }
                         Err(e) => {
                             error!("WebSocket error: {:?}", e);
-                            break;
+                            break Ok(());
                         }
                         _ => {
                             error!("Unexpected message format");
                         }
                     }
+                } else {
+                    error!("No response from server");
+                    sleep(std::time::Duration::from_secs(5)).await;
                 }
+            } else {
+                // No free wallets, wait before checking again
+                sleep(std::time::Duration::from_secs(1)).await;
             }
-            Err(e) => {
-                error!("Failed to connect: {:?}", e);
-                return Err(Box::new(Error::ConnectionError(e.to_string())));
-            }
+
+            // Additional logic to control request frequency
+            sleep(std::time::Duration::from_secs(1)).await;
         }
-        Ok(())
     }
 
-    async fn process_orders(
+    async fn request_batch(
         &self,
-        orders: Vec<SpotOrder>,
-        write: &mut futures_util::stream::SplitSink<WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, Message>,
+        write: Arc<Mutex<futures_util::stream::SplitSink<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+            Message,
+        >>>
     ) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Processing batch of {} orders", orders.len()); 
-
-        
-        let (min_sell, max_buy) = self.calculate_spread(&orders);
-        info!("Batch spread - Max Buy: {}, Min Sell: {}", max_buy.unwrap_or(0), min_sell.unwrap_or(0));
-
-        // Логика правильного спреда: если Max Buy >= Min Sell, это хороший спред
-        if let (Some(max_buy), Some(min_sell)) = (max_buy, min_sell) {
-            if max_buy < min_sell {
-                error!("Invalid batch: Max Buy ({}) < Min Sell ({}), batch rejected", max_buy, min_sell);
-                return Err(Box::new(Error::InvalidBatchError)); // Ошибка, если Max Buy меньше Min Sell
-            }
-        }
-
-        info!("Orders:");
-        for o in &orders {
-            info!("id: {:?} | status {:?}, | type {:?}", o.id, o.status, o.order_type);
-        }
-        let order_ids : Vec<String> = orders.clone().into_iter().map(|o|o.id).collect();
-        info!("orders {:?}", order_ids);
-
-        let result = self.order_processor.match_orders(orders.clone()).await;
-
-        let response = match result {
-            Ok(updates) => {
-                info!("Orders processed successfully");  
-                MatcherResponse {
-                    success: true,
-                    orders: updates,
-                }
-            }
-            Err(err) => {
-                error!("Error while processing orders: {:?}", err);  
-                let failed_updates: Vec<MatcherOrderUpdate> = orders.into_iter().map(|order| MatcherOrderUpdate {
-                    order_id: order.id,
-                    price: order.price,
-                    timestamp: order.timestamp,
-                    new_amount: order.amount,
-                    status: Some(OrderStatus::Failed),
-                    order_type: order.order_type,
-                }).collect();
-
-                MatcherResponse {
-                    success: false,
-                    orders: failed_updates,
-                }
-            }
+        let batch_request = MatcherBatchRequest {
+            uuid: self.uuid.to_string(),
         };
-
-        let response_msg = serde_json::to_string(&response)?;
-        if let Err(e) = write.send(Message::Text(response_msg)).await {
-            error!("Failed to send response to middleware: {:?}", e);
-            return Err(Box::new(Error::SendResponseError(e.to_string())));
-        }
-        info!("Sent match result for orders");
-
-        sleep(Duration::from_millis(500)).await;
-
+        let request_msg = serde_json::to_string(&MatcherRequest::BatchRequest(batch_request))?;
+        let mut write_lock = write.lock().await;
+        write_lock.send(Message::Text(request_msg)).await?;
+        info!("Requested batch from server");
         Ok(())
-    }
-
-    fn calculate_spread(&self, orders: &Vec<SpotOrder>) -> (Option<u128>, Option<u128>) {
-        let mut min_sell: Option<u128> = None;
-        let mut max_buy: Option<u128> = None;
-
-        for order in orders {
-            match order.order_type {
-                OrderType::Buy => {
-                    if let Some(max) = max_buy {
-                        if order.price > max {
-                            max_buy = Some(order.price);
-                        }
-                    } else {
-                        max_buy = Some(order.price);
-                    }
-                }
-                OrderType::Sell => {
-                    if let Some(min) = min_sell {
-                        if order.price < min {
-                            min_sell = Some(order.price);
-                        }
-                    } else {
-                        min_sell = Some(order.price);
-                    }
-                }
-            }
-        }
-
-        // Возвращаем значения в правильном порядке: сначала max_buy, затем min_sell
-        (max_buy, min_sell)
     }
 }
