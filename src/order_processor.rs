@@ -1,22 +1,15 @@
 use crate::config::Settings;
 use crate::error::Error;
 use crate::types::{
-    MatcherOrderUpdate, MatcherResponse, OrderStatus, OrderType, SpotOrder,
+    MatcherOrderUpdate, OrderStatus, OrderType, SpotOrder,
 };
 use fuels::accounts::{provider::Provider, wallet::WalletUnlocked};
 use fuels::types::ContractId;
-use futures_util::stream::SplitSink;
-use futures_util::SinkExt;
 use log::{error, info};
 use spark_market_sdk::SparkMarketContract;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
 
 #[derive(Clone)]
 pub struct OrderProcessor {
