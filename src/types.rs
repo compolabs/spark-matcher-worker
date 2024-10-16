@@ -11,8 +11,8 @@ pub enum OrderType {
 pub enum OrderStatus {
     New,
     InProgress,
-    PartiallyFilled,
-    Filled,
+    PartiallyMatched,
+    Matched,
     Cancelled,
     Failed,
 }

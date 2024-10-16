@@ -175,7 +175,7 @@ impl OrderProcessor {
                         price: order.price,
                         timestamp: order.timestamp,
                         new_amount: 0,
-                        status: Some(OrderStatus::Filled),
+                        status: Some(OrderStatus::Matched),
                         order_type: order.order_type,
                     })
                     .collect();

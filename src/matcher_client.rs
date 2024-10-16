@@ -141,12 +141,12 @@ impl MatcherClient {
                         self.process_orders(orders, write, order_processor, free_wallets).await;
                     }
                     Ok(MatcherResponse::NoOrders) => {
-                        info!("Received NoOrders response. Waiting 10 seconds before retrying.");
-                        sleep(Duration::from_secs(10)).await;
+                        info!("Received NoOrders response. Waiting 1 seconds before retrying.");
+                        sleep(Duration::from_secs(1)).await;
                     }
                     Ok(_) => {
-                        info!("Received unknown response. Waiting 10 seconds before retrying.");
-                        sleep(Duration::from_secs(10)).await;
+                        info!("Received unknown response. Waiting 1 seconds before retrying.");
+                        sleep(Duration::from_secs(1)).await;
                     }
                     Err(_) => {
                         error!("Failed to parse MatcherResponse: {}", text);
