@@ -35,15 +35,10 @@ impl OrderProcessor {
     pub async fn process_orders(
         &self,
         orders: Vec<SpotOrder>,
-        free_wallets: Arc<Mutex<u32>>,
     ) -> Result<Vec<MatcherOrderUpdate>, Box<dyn std::error::Error>> {
         info!("Processing batch of {} orders", orders.len());
 
         
-        {
-            let mut wallets = free_wallets.lock().await;
-            *wallets -= 1;
-        }
 
         let (max_buy, min_sell) = self.calculate_spread(&orders);
         info!("Batch spread - Max Buy: {:?}, Min Sell: {:?}", max_buy, min_sell);
@@ -55,12 +50,6 @@ impl OrderProcessor {
                     "Invalid batch: Max Buy ({}) < Min Sell ({}), batch rejected",
                     max_buy, min_sell
                 );
-
-                
-                {
-                    let mut wallets = free_wallets.lock().await;
-                    *wallets += 1;
-                }
 
                 return Err(Box::new(Error::InvalidBatchError));
             }
@@ -75,12 +64,6 @@ impl OrderProcessor {
         }
 
         let result = self.match_orders(orders.clone()).await;
-
-        
-        {
-            let mut wallets = free_wallets.lock().await;
-            *wallets += 1;
-        }
 
         let updates = match result {
             Ok(updates) => {

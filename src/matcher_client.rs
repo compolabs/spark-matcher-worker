@@ -4,11 +4,13 @@ use crate::order_processor::OrderProcessor;
 use crate::types::{
     MatcherBatchRequest, MatcherConnectRequest, MatcherRequest, MatcherResponse, SpotOrder,
 };
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
+use tokio::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::sleep;
 use tokio_tungstenite::{
     connect_async,
@@ -24,7 +26,7 @@ pub struct MatcherClient {
     ws_url: Url,
     settings: Arc<Settings>,
     order_processor: OrderProcessor,
-    free_wallets: Arc<Mutex<u32>>, 
+    free_wallets: Arc<Semaphore>,
 }
 
 impl MatcherClient {
@@ -37,7 +39,7 @@ impl MatcherClient {
             ws_url,
             settings: settings.clone(),
             order_processor: OrderProcessor::new(settings.clone()),
-            free_wallets: Arc::new(Mutex::new(10)), 
+            free_wallets: Arc::new(Semaphore::new(10)),
         }
     }
 
@@ -84,51 +86,52 @@ impl MatcherClient {
 
     async fn handle_messages(
         &self,
-        write: Arc<Mutex<futures_util::stream::SplitSink<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-            Message,
-        >>>,
-        mut read: futures_util::stream::SplitStream<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-        >,
+        write: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
+        mut read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let free_wallets = self.free_wallets.clone();
         let order_processor = self.order_processor.clone();
 
         loop {
-            let wallets_available = self.check_wallets_availability().await;
-
-            if wallets_available {
-                self.request_batch(write.clone()).await?;
-
-                if let Some(message) = read.next().await {
-                    self.process_message(message, write.clone(), order_processor.clone(), free_wallets.clone()).await?;
-                } else {
-                    error!("No response from server");
-                    sleep(Duration::from_secs(5)).await;
+            // Попытка получить разрешение семафора
+            let permit = match free_wallets.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    // Нет доступных кошельков, ждем
+                    sleep(Duration::from_secs(1)).await;
+                    continue;
                 }
+            };
+
+            // Запрашиваем батч
+            self.request_batch(write.clone()).await?;
+
+            if let Some(message) = read.next().await {
+                // Клонируем self
+                let self_clone = self.clone();
+                let write_clone = write.clone();
+                let order_processor_clone = order_processor.clone();
+
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.process_message(message, write_clone, order_processor_clone, permit).await {
+                        error!("Error processing message: {:?}", e);
+                    }
+                });
             } else {
-                sleep(Duration::from_secs(1)).await;
+                error!("No response from server");
+                sleep(Duration::from_secs(5)).await;
             }
 
             sleep(Duration::from_secs(1)).await;
         }
     }
 
-    async fn check_wallets_availability(&self) -> bool {
-        let wallets = self.free_wallets.lock().await;
-        *wallets > 0
-    }
-
     async fn process_message(
         &self,
         message: Result<Message, tokio_tungstenite::tungstenite::Error>,
-        write: Arc<Mutex<futures_util::stream::SplitSink<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-            Message,
-        >>>,
+        write: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>,
         order_processor: OrderProcessor,
-        free_wallets: Arc<Mutex<u32>>,
+        _permit: OwnedSemaphorePermit,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match message {
             Ok(Message::Text(text)) => {
@@ -138,7 +141,7 @@ impl MatcherClient {
                         sleep(Duration::from_secs(10)).await;
                     }
                     Ok(MatcherResponse::Batch(orders)) => {
-                        self.process_orders(orders, write, order_processor, free_wallets).await;
+                        self.process_orders(orders, write, order_processor).await;
                     }
                     Ok(MatcherResponse::NoOrders) => {
                         info!("Received NoOrders response. Waiting 1 seconds before retrying.");
@@ -177,9 +180,8 @@ impl MatcherClient {
             Message,
         >>>,
         order_processor: OrderProcessor,
-        free_wallets: Arc<Mutex<u32>>,
     ) {
-        let updates = match order_processor.process_orders(orders, free_wallets.clone()).await {
+        let updates = match order_processor.process_orders(orders).await {
             Ok(updates) => updates,
             Err(e) => {
                 error!("Error processing orders: {:?}", e);
