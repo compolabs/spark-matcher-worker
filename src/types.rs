@@ -47,7 +47,8 @@ pub struct MatcherConnectRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MatcherResponse {
     Batch(Vec<SpotOrder>),
-    Ack, 
+    Ack,
+    NoOrders
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,5 +60,5 @@ pub struct MatcherBatchRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MatcherRequest {
     BatchRequest(MatcherBatchRequest),
-    OrderUpdates(Vec<MatcherOrderUpdate>), // Для отправки результатов обработки серверу
+    OrderUpdates(Vec<MatcherOrderUpdate>),
 }

@@ -7,6 +7,7 @@ use crate::types::{
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tokio_tungstenite::{
@@ -23,7 +24,7 @@ pub struct MatcherClient {
     ws_url: Url,
     settings: Arc<Settings>,
     order_processor: OrderProcessor,
-    free_wallets: Arc<Mutex<u32>>, // Number of free wallets
+    free_wallets: Arc<Mutex<u32>>, 
 }
 
 impl MatcherClient {
@@ -36,7 +37,7 @@ impl MatcherClient {
             ws_url,
             settings: settings.clone(),
             order_processor: OrderProcessor::new(settings.clone()),
-            free_wallets: Arc::new(Mutex::new(10)), // Initially, all 10 wallets are free
+            free_wallets: Arc::new(Mutex::new(10)), 
         }
     }
 
@@ -46,102 +47,152 @@ impl MatcherClient {
                 Ok(_) => info!("Matcher {} connected successfully!", self.uuid),
                 Err(e) => error!("Failed to connect Matcher {}: {:?}", self.uuid, e),
             }
-            sleep(std::time::Duration::from_secs(20)).await;
+            sleep(Duration::from_secs(20)).await;
         }
     }
 
     async fn connect_to_ws(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Establish WebSocket connection
         let (ws_stream, _) = connect_async(&self.ws_url).await?;
-        let (write, mut read) = ws_stream.split();
+        let (write, read) = ws_stream.split();
         let write = Arc::new(Mutex::new(write));
 
-        // Send identification message
+        self.send_identification_message(write.clone()).await?;
+
+        
+        self.handle_messages(write, read).await
+    }
+
+    async fn send_identification_message(
+        &self,
+        write: Arc<Mutex<futures_util::stream::SplitSink<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+            Message,
+        >>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let identify_message = MatcherConnectRequest {
             uuid: self.uuid.to_string(),
         };
         let msg = serde_json::to_string(&identify_message)?;
         info!("Sending identification message: {}", msg);
-        {
-            let mut write_lock = write.lock().await;
-            write_lock.send(Message::Text(msg)).await?;
-        }
+
+        let mut write_lock = write.lock().await;
+        write_lock.send(Message::Text(msg)).await?;
         info!("Sent identification message for matcher: {}", self.uuid);
 
-        // Main loop: request batches and handle responses
+        Ok(())
+    }
+
+    async fn handle_messages(
+        &self,
+        write: Arc<Mutex<futures_util::stream::SplitSink<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+            Message,
+        >>>,
+        mut read: futures_util::stream::SplitStream<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+        >,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let free_wallets = self.free_wallets.clone();
         let order_processor = self.order_processor.clone();
 
         loop {
-            // Check for available wallets
-            let wallets_available = {
-                let wallets = free_wallets.lock().await;
-                *wallets > 0
-            };
+            let wallets_available = self.check_wallets_availability().await;
 
             if wallets_available {
-                // Request a batch
                 self.request_batch(write.clone()).await?;
 
-                // Wait for a response with a batch
                 if let Some(message) = read.next().await {
-                    match message {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(MatcherResponse::Batch(orders)) =
-                                serde_json::from_str::<MatcherResponse>(&text)
-                            {
-                                // Process the received batch of orders
-                                let free_wallets_clone = self.free_wallets.clone();
-                                let order_processor_clone = order_processor.clone();
-                                let write_clone = write.clone();
-
-                                tokio::spawn(async move {
-                                    let updates = match order_processor_clone
-                                        .process_orders(orders, free_wallets_clone.clone())
-                                        .await
-                                    {
-                                        Ok(updates) => updates,
-                                        Err(e) => {
-                                            error!("Error processing orders: {:?}", e);
-                                            Vec::new()
-                                        }
-                                    };
-
-                                    // Send processing results back to the server
-                                    let response = MatcherRequest::OrderUpdates(updates);
-                                    let response_msg = serde_json::to_string(&response).unwrap();
-                                    let mut write_lock = write_clone.lock().await;
-                                    if let Err(e) = write_lock.send(Message::Text(response_msg)).await {
-                                        error!("Failed to send updates to server: {:?}", e);
-                                    }
-                                });
-                            } else {
-                                error!("Failed to parse MatcherResponse");
-                            }
-                        }
-                        Ok(Message::Close(_)) => {
-                            info!("Connection closed by server. Reconnecting...");
-                            break Ok(());
-                        }
-                        Err(e) => {
-                            error!("WebSocket error: {:?}", e);
-                            break Ok(());
-                        }
-                        _ => {
-                            error!("Unexpected message format");
-                        }
-                    }
+                    self.process_message(message, write.clone(), order_processor.clone(), free_wallets.clone()).await?;
                 } else {
                     error!("No response from server");
-                    sleep(std::time::Duration::from_secs(5)).await;
+                    sleep(Duration::from_secs(5)).await;
                 }
             } else {
-                // No free wallets, wait before checking again
-                sleep(std::time::Duration::from_secs(1)).await;
+                sleep(Duration::from_secs(1)).await;
             }
 
-            // Additional logic to control request frequency
-            sleep(std::time::Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn check_wallets_availability(&self) -> bool {
+        let wallets = self.free_wallets.lock().await;
+        *wallets > 0
+    }
+
+    async fn process_message(
+        &self,
+        message: Result<Message, tokio_tungstenite::tungstenite::Error>,
+        write: Arc<Mutex<futures_util::stream::SplitSink<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+            Message,
+        >>>,
+        order_processor: OrderProcessor,
+        free_wallets: Arc<Mutex<u32>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match message {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<MatcherResponse>(&text) {
+                    Ok(MatcherResponse::Batch(orders)) if orders.is_empty() => {
+                        info!("No orders available for matching. Waiting 10 seconds.");
+                        sleep(Duration::from_secs(10)).await;
+                    }
+                    Ok(MatcherResponse::Batch(orders)) => {
+                        self.process_orders(orders, write, order_processor, free_wallets).await;
+                    }
+                    Ok(MatcherResponse::NoOrders) => {
+                        info!("Received NoOrders response. Waiting 10 seconds before retrying.");
+                        sleep(Duration::from_secs(10)).await;
+                    }
+                    Ok(_) => {
+                        info!("Received unknown response. Waiting 10 seconds before retrying.");
+                        sleep(Duration::from_secs(10)).await;
+                    }
+                    Err(_) => {
+                        error!("Failed to parse MatcherResponse: {}", text);
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => {
+                info!("Connection closed by server. Reconnecting...");
+                return Ok(());
+            }
+            Err(e) => {
+                error!("WebSocket error: {:?}", e);
+                return Err(Box::new(e));
+            }
+            _ => {
+                error!("Unexpected message format");
+            }
+        }
+        Ok(())
+    }
+
+
+    async fn process_orders(
+        &self,
+        orders: Vec<SpotOrder>,
+        write: Arc<Mutex<futures_util::stream::SplitSink<
+            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+            Message,
+        >>>,
+        order_processor: OrderProcessor,
+        free_wallets: Arc<Mutex<u32>>,
+    ) {
+        let updates = match order_processor.process_orders(orders, free_wallets.clone()).await {
+            Ok(updates) => updates,
+            Err(e) => {
+                error!("Error processing orders: {:?}", e);
+                Vec::new()
+            }
+        };
+
+        let response = MatcherRequest::OrderUpdates(updates);
+        let response_msg = serde_json::to_string(&response).unwrap();
+
+        let mut write_lock = write.lock().await;
+        if let Err(e) = write_lock.send(Message::Text(response_msg)).await {
+            error!("Failed to send updates to server: {:?}", e);
         }
     }
 

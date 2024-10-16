@@ -39,7 +39,7 @@ impl OrderProcessor {
     ) -> Result<Vec<MatcherOrderUpdate>, Box<dyn std::error::Error>> {
         info!("Processing batch of {} orders", orders.len());
 
-        // Уменьшаем количество свободных кошельков
+        
         {
             let mut wallets = free_wallets.lock().await;
             *wallets -= 1;
@@ -48,7 +48,7 @@ impl OrderProcessor {
         let (max_buy, min_sell) = self.calculate_spread(&orders);
         info!("Batch spread - Max Buy: {:?}, Min Sell: {:?}", max_buy, min_sell);
 
-        // Проверка на правильный спред
+        
         if let (Some(max_buy), Some(min_sell)) = (max_buy, min_sell) {
             if max_buy < min_sell {
                 error!(
@@ -56,7 +56,7 @@ impl OrderProcessor {
                     max_buy, min_sell
                 );
 
-                // Увеличиваем количество свободных кошельков
+                
                 {
                     let mut wallets = free_wallets.lock().await;
                     *wallets += 1;
@@ -69,14 +69,14 @@ impl OrderProcessor {
         info!("Orders:");
         for o in &orders {
             info!(
-                "id: {:?} | status {:?}, | type {:?}",
-                o.id, o.status, o.order_type
+                "id: {:?} | status {:?}, | type {:?} | am {:?}",
+                o.id, o.status, o.order_type, o.amount
             );
         }
 
         let result = self.match_orders(orders.clone()).await;
 
-        // Увеличиваем количество свободных кошельков после обработки
+        
         {
             let mut wallets = free_wallets.lock().await;
             *wallets += 1;

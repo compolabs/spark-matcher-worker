@@ -1,5 +1,5 @@
 [settings]
-mnemonic = "mnemonic"
-contract_id= "0xbc69e42348c9a992100970e8469247b58a517c2f7dd373741c6707cda35ccfc6"
+mnemonic = "game police dinner carbon throw work regular initial firm capable hamster sorry"
+contract_id= "0xf45e20b88787a8be585eb9f13c94aae099407651e094dadc8d92bd0a34ebdeb2"
 uuid = "20faf0f7-94a9-4651-a073-9f4d376201fa"
 websocket_url="ws://localhost:9001"
