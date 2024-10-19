@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, JsonSchema, Serialize, Deserialize)]
 pub enum OrderType {
@@ -48,7 +48,7 @@ pub struct MatcherConnectRequest {
 pub enum MatcherResponse {
     Batch(Vec<SpotOrder>),
     Ack,
-    NoOrders
+    NoOrders,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,9 +56,9 @@ pub struct MatcherBatchRequest {
     pub uuid: String,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MatcherRequest {
     BatchRequest(MatcherBatchRequest),
     OrderUpdates(Vec<MatcherOrderUpdate>),
+    Connect(MatcherConnectRequest),
 }

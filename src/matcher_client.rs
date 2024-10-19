@@ -1,5 +1,4 @@
 use crate::config::Settings;
-use crate::error::Error;
 use crate::order_processor::OrderProcessor;
 use crate::types::{
     MatcherBatchRequest, MatcherConnectRequest, MatcherRequest, MatcherResponse, SpotOrder,
@@ -7,20 +6,19 @@ use crate::types::{
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
-use tokio::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::sleep;
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::protocol::Message,
-    MaybeTlsStream, WebSocketStream,
+    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct MatcherClient {
     uuid: Uuid,
     ws_url: Url,
@@ -31,8 +29,7 @@ pub struct MatcherClient {
 
 impl MatcherClient {
     pub fn new(ws_url: Url, settings: Arc<Settings>) -> Self {
-        let uuid =
-            Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
+        let uuid = Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
 
         MatcherClient {
             uuid,
@@ -60,20 +57,23 @@ impl MatcherClient {
 
         self.send_identification_message(write.clone()).await?;
 
-        
         self.handle_messages(write, read).await
     }
 
     async fn send_identification_message(
         &self,
-        write: Arc<Mutex<futures_util::stream::SplitSink<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-            Message,
-        >>>,
+        write: Arc<
+            Mutex<
+                futures_util::stream::SplitSink<
+                    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+                    Message,
+                >,
+            >,
+        >,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let identify_message = MatcherConnectRequest {
+        let identify_message = MatcherRequest::Connect(MatcherConnectRequest {
             uuid: self.uuid.to_string(),
-        };
+        });
         let msg = serde_json::to_string(&identify_message)?;
         info!("Sending identification message: {}", msg);
 
@@ -113,7 +113,10 @@ impl MatcherClient {
                 let order_processor_clone = order_processor.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = self_clone.process_message(message, write_clone, order_processor_clone, permit).await {
+                    if let Err(e) = self_clone
+                        .process_message(message, write_clone, order_processor_clone, permit)
+                        .await
+                    {
                         error!("Error processing message: {:?}", e);
                     }
                 });
@@ -134,28 +137,26 @@ impl MatcherClient {
         _permit: OwnedSemaphorePermit,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match message {
-            Ok(Message::Text(text)) => {
-                match serde_json::from_str::<MatcherResponse>(&text) {
-                    Ok(MatcherResponse::Batch(orders)) if orders.is_empty() => {
-                        info!("No orders available for matching. Waiting 10 seconds.");
-                        sleep(Duration::from_secs(10)).await;
-                    }
-                    Ok(MatcherResponse::Batch(orders)) => {
-                        self.process_orders(orders, write, order_processor).await;
-                    }
-                    Ok(MatcherResponse::NoOrders) => {
-                        info!("Received NoOrders response. Waiting 1 seconds before retrying.");
-                        sleep(Duration::from_secs(1)).await;
-                    }
-                    Ok(_) => {
-                        info!("Received unknown response. Waiting 1 seconds before retrying.");
-                        sleep(Duration::from_secs(1)).await;
-                    }
-                    Err(_) => {
-                        error!("Failed to parse MatcherResponse: {}", text);
-                    }
+            Ok(Message::Text(text)) => match serde_json::from_str::<MatcherResponse>(&text) {
+                Ok(MatcherResponse::Batch(orders)) if orders.is_empty() => {
+                    info!("No orders available for matching. Waiting 10 seconds.");
+                    sleep(Duration::from_secs(10)).await;
                 }
-            }
+                Ok(MatcherResponse::Batch(orders)) => {
+                    self.process_orders(orders, write, order_processor).await;
+                }
+                Ok(MatcherResponse::NoOrders) => {
+                    info!("Received NoOrders response. Waiting 1 seconds before retrying.");
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Ok(_) => {
+                    info!("Received unknown response. Waiting 1 seconds before retrying.");
+                    sleep(Duration::from_secs(1)).await;
+                }
+                Err(_) => {
+                    error!("Failed to parse MatcherResponse: {}", text);
+                }
+            },
             Ok(Message::Close(_)) => {
                 info!("Connection closed by server. Reconnecting...");
                 return Ok(());
@@ -171,14 +172,17 @@ impl MatcherClient {
         Ok(())
     }
 
-
     async fn process_orders(
         &self,
         orders: Vec<SpotOrder>,
-        write: Arc<Mutex<futures_util::stream::SplitSink<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-            Message,
-        >>>,
+        write: Arc<
+            Mutex<
+                futures_util::stream::SplitSink<
+                    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+                    Message,
+                >,
+            >,
+        >,
         order_processor: OrderProcessor,
     ) {
         let updates = match order_processor.process_orders(orders).await {
@@ -200,10 +204,14 @@ impl MatcherClient {
 
     async fn request_batch(
         &self,
-        write: Arc<Mutex<futures_util::stream::SplitSink<
-            WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-            Message,
-        >>>
+        write: Arc<
+            Mutex<
+                futures_util::stream::SplitSink<
+                    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+                    Message,
+                >,
+            >,
+        >,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let batch_request = MatcherBatchRequest {
             uuid: self.uuid.to_string(),

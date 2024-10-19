@@ -1,13 +1,13 @@
 mod config;
-mod matcher_client;
 mod error;
+mod matcher_client;
 mod order_processor;
 mod types;
 
 use config::AppConfig;
 use matcher_client::MatcherClient;
-use url::Url;
 use std::{env, sync::Arc};
+use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

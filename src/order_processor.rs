@@ -1,8 +1,6 @@
 use crate::config::Settings;
 use crate::error::Error;
-use crate::types::{
-    MatcherOrderUpdate, OrderStatus, OrderType, SpotOrder,
-};
+use crate::types::{MatcherOrderUpdate, OrderStatus, OrderType, SpotOrder};
 use fuels::accounts::{provider::Provider, wallet::WalletUnlocked};
 use fuels::types::ContractId;
 use log::{error, info};
@@ -11,7 +9,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OrderProcessor {
     settings: Arc<Settings>,
     hd_wallet_number: Arc<Mutex<u32>>,
@@ -38,12 +36,12 @@ impl OrderProcessor {
     ) -> Result<Vec<MatcherOrderUpdate>, Box<dyn std::error::Error>> {
         info!("Processing batch of {} orders", orders.len());
 
-        
-
         let (max_buy, min_sell) = self.calculate_spread(&orders);
-        info!("Batch spread - Max Buy: {:?}, Min Sell: {:?}", max_buy, min_sell);
+        info!(
+            "Batch spread - Max Buy: {:?}, Min Sell: {:?}",
+            max_buy, min_sell
+        );
 
-        
         if let (Some(max_buy), Some(min_sell)) = (max_buy, min_sell) {
             if max_buy < min_sell {
                 error!(
@@ -51,7 +49,7 @@ impl OrderProcessor {
                     max_buy, min_sell
                 );
 
-                return Err(Box::new(Error::InvalidBatchError));
+                return Err(Box::new(Error::InvalidBatch));
             }
         }
 
@@ -131,11 +129,9 @@ impl OrderProcessor {
         )
         .expect("Failed to create wallet");
 
-        let market = SparkMarketContract::new(
-            ContractId::from_str(&self.settings.contract_id)?,
-            wallet,
-        )
-        .await;
+        let market =
+            SparkMarketContract::new(ContractId::from_str(&self.settings.contract_id)?, wallet)
+                .await;
 
         let unique_bits256_ids: Vec<fuels::types::Bits256> = orders
             .iter()
@@ -168,7 +164,7 @@ impl OrderProcessor {
             Err(e) => {
                 error!("Error while matching orders: {:?}", e);
 
-                let updates: Vec<MatcherOrderUpdate> = orders
+                let _failed_orders: Vec<MatcherOrderUpdate> = orders
                     .into_iter()
                     .map(|order| MatcherOrderUpdate {
                         order_id: order.id,
@@ -180,7 +176,7 @@ impl OrderProcessor {
                     })
                     .collect();
 
-                Err(Error::MatchOrdersError(e.to_string()))
+                Err(Error::MatchOrders(e.to_string()))
             }
         }
     }
