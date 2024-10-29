@@ -1,5 +1,5 @@
 [settings]
 mnemonic = "mnemonic"
-contract_id = "0x598181fdf206ef2109967be6c4ad75c338a1f082f27d98fedeacd5591c34552c"
-uuid = "20faf0f7-94a9-4651-a073-9f4d376201fa"
-websocket_url="ws://localhost:9001"
+contract_id = "0x12a5f8666279f841e5900500297ce3c8bcf40103dd191c56dd3ec86f92b9217b"
+uuid = "00507a22-100a-4856-950d-9655a17d945e"
+websocket_url="ws://localhost:19001"
