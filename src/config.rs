@@ -1,9 +1,10 @@
+use std::env;
 use serde::Deserialize;
-use std::fs;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct AppConfig {
-    pub settings: Settings,
+use crate::error::Error;
+
+pub fn ev(key: &str) -> Result<String, Error> {
+    env::var(key).map_err(|e| Error::EnvVarError(key.to_owned(), e.to_string()))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -12,11 +13,5 @@ pub struct Settings {
     pub mnemonic: String,
     pub contract_id: String,
     pub websocket_url: String,
-}
-
-impl AppConfig {
-    pub fn new(config_path: &str) -> Self {
-        let config_content = fs::read_to_string(config_path).expect("Failed to read config file");
-        toml::from_str(&config_content).expect("Failed to parse config file")
-    }
+    pub chain: String,
 }

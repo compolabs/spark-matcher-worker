@@ -8,7 +8,7 @@ let
     paths = [ pkgs.openssl.out pkgs.openssl.dev ];
   };
 in pkgs.stdenv.mkDerivation rec {
-  name = "spark-matcher-simple";
+  name = "spark-matcher-worker";
   env = pkgs.buildEnv { name = name; paths = buildInputs; };
 
   buildInputs = [
@@ -26,7 +26,7 @@ in pkgs.stdenv.mkDerivation rec {
     CONSOLE_LOG_LEVEL="info"
     echo "RUST_LOG is set to $RUST_LOG"
 
-    echo "spark-matcher-simple environment is ready."
+    echo "spark-matcher-worker environment is ready."
   '';
 
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.libiconv ];
