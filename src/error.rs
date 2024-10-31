@@ -5,6 +5,9 @@ pub enum Error {
     #[error("Fuel error: {0}")]
     Fuel(#[from] fuels::types::errors::Error),
 
+    #[error("Failed to retrieve environment variable '{0}': {1}")]
+    EnvVarError(String, String),
+
     #[error("Failed to match orders: {0}")]
     MatchOrders(String),
 

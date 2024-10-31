@@ -1387,6 +1387,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
 name = "downcast"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5629,9 +5635,9 @@ dependencies = [
 
 [[package]]
 name = "spark-market-sdk"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab19c341f67f2b2aa04d6687c739b9a9330a27d26e8272a56f9353073ab118a7"
+checksum = "60c74e6ab21495f720a5f819589697d9902d30ae68b20a7db3d8384460104b0b"
 dependencies = [
  "anyhow",
  "fuels",
@@ -5640,9 +5646,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "spark-matcher-simple"
+name = "spark-matcher-worker"
 version = "0.1.0"
 dependencies = [
+ "dotenv",
  "env_logger",
  "fuels",
  "futures-util",

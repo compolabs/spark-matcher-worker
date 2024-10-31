@@ -118,7 +118,12 @@ impl OrderProcessor {
     }
 
     async fn match_orders(&self, orders: Vec<SpotOrder>) -> Result<Vec<MatcherOrderUpdate>, Error> {
-        let provider = Provider::connect("mainnet.fuel.network").await?;
+        let chain_string = &self.settings.chain;
+        let provider_url = match chain_string.as_str(){
+            "FUEL" => "mainnet.fuel.network",
+            _ => "testnet.fuel.network"
+        };
+        let provider = Provider::connect(provider_url).await?;
 
         let hd_wallet_number = self.get_hd_wallet_number().await;
         let path = format!("m/44'/1179993420'/{}'/0/0", hd_wallet_number);

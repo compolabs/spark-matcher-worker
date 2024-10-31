@@ -14,26 +14,23 @@ use tokio::time::sleep;
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
-use url::Url;
 use uuid::Uuid;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MatcherClient {
     uuid: Uuid,
-    ws_url: Url,
     settings: Arc<Settings>,
     order_processor: OrderProcessor,
     free_wallets: Arc<Semaphore>,
 }
 
 impl MatcherClient {
-    pub fn new(ws_url: Url, settings: Arc<Settings>) -> Self {
+    pub fn new(settings: Arc<Settings>) -> Self {
         let uuid = Uuid::parse_str(&settings.uuid).expect("Invalid UUID format in configuration");
 
         MatcherClient {
             uuid,
-            ws_url,
             settings: settings.clone(),
             order_processor: OrderProcessor::new(settings.clone()),
             free_wallets: Arc::new(Semaphore::new(10)),
@@ -51,7 +48,7 @@ impl MatcherClient {
     }
 
     async fn connect_to_ws(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let (ws_stream, _) = connect_async(&self.ws_url).await?;
+        let (ws_stream, _) = connect_async(&self.settings.websocket_url).await?;
         let (write, read) = ws_stream.split();
         let write = Arc::new(Mutex::new(write));
 
