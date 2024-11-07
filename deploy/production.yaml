@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: production-spark-matcher-worker
+spec:
+  project: sprk
+  source:
+    repoURL: https://github.com/compolabs/spark-matcher-worker.git
+    targetRevision: '0.*'
+    path: deploy/chart
+    helm:
+      valueFiles:
+        - values.production.yaml
+  destination:
+    name: production
+    namespace: sprk
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

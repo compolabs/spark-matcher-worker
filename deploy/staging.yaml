@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staging-spark-matcher-worker
+spec:
+  project: sprk
+  source:
+    repoURL: https://github.com/compolabs/spark-matcher-worker.git
+    targetRevision: master
+    path: deploy/chart
+    helm:
+      valueFiles:
+        - values.staging.yaml
+  destination:
+    name: staging
+    namespace: sprk
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
