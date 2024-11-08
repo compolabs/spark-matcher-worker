@@ -3,18 +3,14 @@ name: Build and Push Docker Image with Buildx and Push Helm Chart
 on:
   push:
     branches:
-      - main
+      - master
       - dev
     tags:
       - '*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
   docker:
-    if: github.event_name != 'pull_request'
     runs-on: ${{ vars.RUNNER_SCALE_SET }}
     steps:
       - name: Login to Docker Registry
