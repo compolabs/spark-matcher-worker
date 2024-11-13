@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 dotenv = "0.15"
 env_logger = "0.10"
-fuels = { version = "0.66.5", features = ["fuel-core-lib"] }
+fuels = { version = "0.66.10", features = ["fuel-core-lib"] }
 futures-util = "0.3"
 log = "0.4"
 schemars = "0.8.0"
@@ -15,7 +15,7 @@ serde_json = "1.0.116"
 spark-market-sdk = "0.6.5" 
 thiserror = "1.0.63"
 tokio = { version = "1.41.0", features = ["rt-multi-thread", "macros", "time"] }
-tokio-tungstenite = "0.17.1"
+tokio-tungstenite = "0.24.0"
 toml = "0.5"
 url = "2.3.1"
 uuid = { version = "1.0", features = ["v4"] }
