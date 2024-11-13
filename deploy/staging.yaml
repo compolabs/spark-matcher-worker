@@ -1,6 +1,9 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: harbor.infra.sprk.fi/sprk/spark-matcher-worker:latest
+    argocd-image-updater.argoproj.io/update-strategy: digest
   name: staging-spark-matcher-worker
 spec:
   project: sprk
