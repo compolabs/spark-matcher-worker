@@ -4,7 +4,7 @@ fullnameOverride: spark-matcher-worker
 
 image:
   repository: harbor.infra.sprk.fi/sprk/spark-matcher-worker
-  pullPolicy: ifNotPresent
+  pullPolicy: IfNotPresent
 
 service:
   type: ClusterIP

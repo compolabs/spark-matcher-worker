@@ -33,10 +33,6 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=semver,pattern={{version}}
-            type=sha,format=long,prefix=
-            type=sha,prefix=
-          charts: |
-            type=semver,pattern={{version}}
 
       - name: Build and Push Docker image
         uses: docker/build-push-action@v6
