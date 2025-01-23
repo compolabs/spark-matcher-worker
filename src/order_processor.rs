@@ -26,7 +26,7 @@ impl OrderProcessor {
     async fn get_hd_wallet_number(&self) -> u32 {
         let mut wallet_number = self.hd_wallet_number.lock().await;
         let current_number = *wallet_number;
-        *wallet_number = (*wallet_number + 1) % 10;
+        *wallet_number = (*wallet_number + 1) % 5;
         current_number
     }
 

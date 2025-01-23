@@ -33,7 +33,7 @@ impl MatcherClient {
             uuid,
             settings: settings.clone(),
             order_processor: OrderProcessor::new(settings.clone()),
-            free_wallets: Arc::new(Semaphore::new(10)),
+            free_wallets: Arc::new(Semaphore::new(5)),
         }
     }
 
