@@ -60,7 +60,6 @@ impl OrderProcessor {
                 o.id, o.status, o.order_type, o.amount
             );
         }
-
         let result = self.match_orders(orders.clone()).await;
 
         let updates = match result {
@@ -133,6 +132,7 @@ impl OrderProcessor {
             &path,
         )
         .expect("Failed to create wallet");
+        let wallet_address = wallet.address().clone();
 
         let market =
             SparkMarketContract::new(ContractId::from_str(&self.settings.contract_id)?, wallet)
@@ -144,6 +144,7 @@ impl OrderProcessor {
             .collect();
 
         info!("Processing orders with HD wallet {}", hd_wallet_number);
+        info!("Wallet address {}", &wallet_address);
 
         match market.match_order_many(unique_bits256_ids.clone()).await {
             Ok(result) => {
