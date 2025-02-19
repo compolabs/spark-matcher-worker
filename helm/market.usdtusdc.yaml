@@ -1,0 +1,4 @@
+marketEnv:
+  - name: MARKET_ID
+    value: "0xe4e4844f78e2e470b590d0c76ffc9f4422a87317377813a181a02c60a60bc774"
+
