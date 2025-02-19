@@ -46,7 +46,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 Selector labels
 */}}
 {{- define "helm-chart.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "helm-chart.name" . }}
+app.kubernetes.io/name: {{ include "helm-chart.fullname" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
