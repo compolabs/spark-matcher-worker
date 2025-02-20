@@ -225,7 +225,6 @@ impl MatcherClient {
         let request_msg = serde_json::to_string(&MatcherRequest::BatchRequest(batch_request))?;
         let mut write_lock = write.lock().await;
         write_lock.send(Message::Text(request_msg)).await?;
-        info!("Requested batch from server");
         Ok(())
     }
 }
