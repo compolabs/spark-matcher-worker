@@ -3,11 +3,11 @@ use crate::error::Error;
 use crate::types::{MatcherOrderUpdate, OrderStatus, OrderType, SpotOrder};
 use fuels::accounts::{provider::Provider, wallet::WalletUnlocked};
 use fuels::types::ContractId;
-use tracing::{debug, error, info};
 use spark_market_sdk::SparkMarketContract;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 pub struct OrderProcessor {
@@ -118,9 +118,9 @@ impl OrderProcessor {
 
     async fn match_orders(&self, orders: Vec<SpotOrder>) -> Result<Vec<MatcherOrderUpdate>, Error> {
         let chain_string = &self.settings.chain;
-        let provider_url = match chain_string.as_str(){
+        let provider_url = match chain_string.as_str() {
             "FUEL" => "mainnet.fuel.network",
-            _ => "testnet.fuel.network"
+            _ => "testnet.fuel.network",
         };
         let provider = Provider::connect(provider_url).await?;
 

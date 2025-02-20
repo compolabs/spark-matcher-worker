@@ -4,8 +4,8 @@ mod matcher_client;
 mod order_processor;
 mod types;
 
-use std::sync::Arc;
 use dotenv::dotenv;
+use std::sync::Arc;
 
 use config::{ev, Settings};
 use matcher_client::MatcherClient;
@@ -15,7 +15,7 @@ use tracing::{error, info};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_target(false)
-        .with_level(true) 
+        .with_level(true)
         .init();
     dotenv().ok();
 
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         uuid: ev("UUID")?,
         mnemonic: ev("MNEMONIC")?,
         contract_id: ev("CONTRACT_ID")?,
-        websocket_url: ev("WEBSOCKET_URL")?, 
+        websocket_url: ev("WEBSOCKET_URL")?,
         chain: ev("CHAIN")?,
     };
     info!(

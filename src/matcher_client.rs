@@ -5,7 +5,6 @@ use crate::types::{
 };
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use tracing::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -14,6 +13,7 @@ use tokio::time::sleep;
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[allow(dead_code)]
