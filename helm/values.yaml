@@ -1,7 +1,5 @@
 replicaCount: 1
 
-fullnameOverride: spark-matcher-worker
-
 image:
   repository: harbor.infra.sprk.fi/sprk/spark-matcher-worker
   pullPolicy: IfNotPresent
