@@ -9,10 +9,14 @@ use dotenv::dotenv;
 
 use config::{ev, Settings};
 use matcher_client::MatcherClient;
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_level(true) 
+        .init();
     dotenv().ok();
 
     let settings = Settings {
@@ -22,11 +26,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         websocket_url: ev("WEBSOCKET_URL")?, 
         chain: ev("CHAIN")?,
     };
+    info!(
+        uuid = %settings.uuid,
+        domain = %settings.websocket_url,
+        chain = %settings.chain,
+        contract_id = %settings.contract_id,
+        "Starting spark-matcher-worker..."
+    );
     let matcher_client = MatcherClient::new(Arc::new(settings));
 
     match matcher_client.connect().await {
-        Ok(_) => println!("Matcher connected successfully"),
-        Err(e) => eprintln!("Failed to connect matcher: {:?}", e),
+        Ok(_) => info!("Matcher connected successfully"),
+        Err(e) => error!("Failed to connect matcher: {:?}", e),
     }
     Ok(())
 }

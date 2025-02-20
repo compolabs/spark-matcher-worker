@@ -5,7 +5,7 @@ use crate::types::{
 };
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use log::{error, info};
+use tracing::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -48,11 +48,21 @@ impl MatcherClient {
     }
 
     async fn connect_to_ws(&self) -> Result<(), Box<dyn std::error::Error>> {
+        info!(
+        uuid = %self.uuid,
+        websocket_url = %self.settings.websocket_url,
+        "Connecting to middleware WebSocket..."
+        );
         let (ws_stream, _) = connect_async(&self.settings.websocket_url).await?;
         let (write, read) = ws_stream.split();
         let write = Arc::new(Mutex::new(write));
 
         self.send_identification_message(write.clone()).await?;
+
+        info!(
+        uuid = %self.uuid,
+        "WebSocket connection established"
+        );
 
         self.handle_messages(write, read).await
     }
@@ -90,21 +100,19 @@ impl MatcherClient {
         let order_processor = self.order_processor.clone();
 
         loop {
-            // Попытка получить разрешение семафора
             let permit = match free_wallets.clone().try_acquire_owned() {
                 Ok(permit) => permit,
                 Err(_) => {
-                    // Нет доступных кошельков, ждем
+                    debug!("No free wallets right now, waiting 1s...");
                     sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             };
 
-            // Запрашиваем батч
+            debug!("Requesting a new batch from the server...");
             self.request_batch(write.clone()).await?;
 
             if let Some(message) = read.next().await {
-                // Клонируем self
                 let self_clone = self.clone();
                 let write_clone = write.clone();
                 let order_processor_clone = order_processor.clone();
@@ -118,7 +126,7 @@ impl MatcherClient {
                     }
                 });
             } else {
-                error!("No response from server");
+                warn!("No response from server (None). Retrying in 5s...");
                 sleep(Duration::from_secs(5)).await;
             }
 
@@ -136,18 +144,19 @@ impl MatcherClient {
         match message {
             Ok(Message::Text(text)) => match serde_json::from_str::<MatcherResponse>(&text) {
                 Ok(MatcherResponse::Batch(orders)) if orders.is_empty() => {
-                    info!("No orders available for matching. Waiting 10 seconds.");
+                    debug!("No orders available for matching. Waiting 10 seconds.");
                     sleep(Duration::from_secs(10)).await;
                 }
                 Ok(MatcherResponse::Batch(orders)) => {
+                    info!("Received {} orders to process", orders.len());
                     self.process_orders(orders, write, order_processor).await;
                 }
                 Ok(MatcherResponse::NoOrders) => {
-                    info!("Received NoOrders response. Waiting 1 seconds before retrying.");
+                    debug!("Received NoOrders response. Waiting 1 seconds before retrying.");
                     sleep(Duration::from_secs(1)).await;
                 }
                 Ok(_) => {
-                    info!("Received unknown response. Waiting 1 seconds before retrying.");
+                    warn!("Received unknown response. Waiting 1 seconds before retrying.");
                     sleep(Duration::from_secs(1)).await;
                 }
                 Err(_) => {

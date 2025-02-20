@@ -3,7 +3,7 @@ use crate::error::Error;
 use crate::types::{MatcherOrderUpdate, OrderStatus, OrderType, SpotOrder};
 use fuels::accounts::{provider::Provider, wallet::WalletUnlocked};
 use fuels::types::ContractId;
-use log::{error, info};
+use tracing::{debug, error, info};
 use spark_market_sdk::SparkMarketContract;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -53,9 +53,9 @@ impl OrderProcessor {
             }
         }
 
-        info!("Orders:");
+        debug!("Orders:");
         for o in &orders {
-            info!(
+            debug!(
                 "id: {:?} | status {:?}, | type {:?} | am {:?}",
                 o.id, o.status, o.order_type, o.amount
             );
@@ -143,8 +143,8 @@ impl OrderProcessor {
             .map(|order| fuels::types::Bits256::from_hex_str(&order.id).unwrap())
             .collect();
 
-        info!("Processing orders with HD wallet {}", hd_wallet_number);
-        info!("Wallet address {}", &wallet_address);
+        debug!("Processing orders with HD wallet {}", hd_wallet_number);
+        debug!("Wallet address {}", &wallet_address);
 
         match market.match_order_many(unique_bits256_ids.clone()).await {
             Ok(result) => {
