@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: harbor.infra.sprk.fi/sprk/spark-matcher-worker
+  repository: harbor.infra.v12.trade/sprk/spark-matcher-worker
   pullPolicy: IfNotPresent
 
 service:
